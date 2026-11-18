@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from gateway.api.routes import health
+from gateway.api.routes import health, process
 from gateway.config import settings
 from gateway.core.lifespan import lifespan
 from gateway.core.logging import configure_logging
@@ -15,7 +15,11 @@ app = FastAPI(
 
 app.include_router(
     health.router,
-    prefix=f"{settings.api_v1_prefix}/health",
+)
+
+app.include_router(
+    process.router,
+    prefix=settings.api_v1_prefix,
 )
 
 

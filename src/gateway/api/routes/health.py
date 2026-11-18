@@ -3,7 +3,7 @@ from fastapi import APIRouter, Request
 router = APIRouter(tags=["Health"])
 
 
-@router.get("/live")
+@router.get("/health")
 async def liveness():
     return {
         "status": "alive",
