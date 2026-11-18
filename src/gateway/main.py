@@ -3,7 +3,9 @@ from fastapi import FastAPI
 from gateway.api.routes import health
 from gateway.config import settings
 from gateway.core.lifespan import lifespan
+from gateway.core.logging import configure_logging
 
+configure_logging()
 
 app = FastAPI(
     title=settings.app_name,

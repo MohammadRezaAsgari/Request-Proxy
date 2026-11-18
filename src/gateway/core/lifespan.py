@@ -10,9 +10,7 @@ from gateway.config import settings
 async def lifespan(app: FastAPI):
     limits = httpx.Limits(
         max_connections=settings.upstream_max_connections,
-        max_keepalive_connections=(
-            settings.upstream_max_keepalive_connections
-        ),
+        max_keepalive_connections=(settings.upstream_max_keepalive_connections),
     )
 
     timeout = httpx.Timeout(

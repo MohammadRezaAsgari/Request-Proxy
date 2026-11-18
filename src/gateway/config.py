@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     upstream_max_connections: int
     upstream_max_keepalive_connections: int
 
+    provider_a_url: str
+    provider_b_url: str
+    provider_c_url: str
+
 
 @lru_cache
 def get_settings() -> Settings:
