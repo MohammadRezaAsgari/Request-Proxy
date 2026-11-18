@@ -8,6 +8,7 @@ Usage:
 import argparse
 import asyncio
 import time
+import uuid
 from collections import Counter
 
 import httpx
@@ -15,6 +16,10 @@ import httpx
 GATEWAY_URL = "http://localhost:8000"
 PROCESS_URL = f"{GATEWAY_URL}/v1/process"
 POLL_INTERVAL = 0.5
+
+# Every run uses fresh idempotency keys so repeated runs measure real work
+# instead of hitting the previous run's 24h idempotency records.
+RUN_ID = uuid.uuid4().hex[:8]
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -33,7 +38,9 @@ async def submit_job(client, semaphore, request_id: int) -> dict:
                     "request_id": request_id,
                     "message": "Hello Gateway",
                 },
-                headers={"Idempotency-Key": f"bench-{request_id}"},
+                headers={
+                    "Idempotency-Key": f"bench-{RUN_ID}-{request_id}"
+                },
             )
         except httpx.RequestError as exc:
             return {
@@ -53,6 +60,7 @@ async def submit_job(client, semaphore, request_id: int) -> dict:
             "elapsed": time.perf_counter() - start,
             "submitted_at": time.perf_counter(),
             "job_id": body.get("job_id"),
+            "duplicate": body.get("duplicate"),
             "error": None,
         }
 
@@ -129,7 +137,7 @@ async def report_progress(
 
 
 async def idempotency_check(client) -> None:
-    headers = {"Idempotency-Key": "bench-idempotency-check"}
+    headers = {"Idempotency-Key": f"bench-idempotency-{RUN_ID}"}
 
     first = await client.post(
         PROCESS_URL,
@@ -261,9 +269,12 @@ async def main(
     )
 
     print("\n========== ASYNC GATEWAY BENCHMARK ==========")
+    print(f"Run id:              {RUN_ID}")
     print(f"Jobs submitted:      {total_requests}")
     print(f"Accepted (202):      {len(accepted)}")
     print(f"Rejected:            {len(rejected)}")
+    print(f"Duplicate jobs:      "
+          f"{sum(1 for s in accepted if s.get('duplicate'))}")
     print(f"Concurrency:         {concurrency}")
     print(f"Total time:          {total_time:.2f}s")
     print(f"Submit throughput:   "
