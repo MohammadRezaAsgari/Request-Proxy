@@ -4,6 +4,7 @@ from gateway.api.routes import health, process
 from gateway.config import settings
 from gateway.core.lifespan import lifespan
 from gateway.core.logging import configure_logging
+from gateway.core.middleware import RequestLoggingMiddleware
 
 configure_logging()
 
@@ -12,6 +13,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(
     health.router,

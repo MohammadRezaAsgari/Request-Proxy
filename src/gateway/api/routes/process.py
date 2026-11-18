@@ -1,8 +1,12 @@
+import logging
+
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from gateway.routing.selector import selector
+
+logger = logging.getLogger("gateway")
 
 router = APIRouter()
 
@@ -10,6 +14,12 @@ router = APIRouter()
 @router.post("/process")
 async def process(request: Request):
     provider = selector.select()
+
+    logger.info(
+        "request_id=%s selected_provider=%s",
+        request.state.request_id,
+        provider.name,
+    )
 
     url = f"{provider.base_url}/v1/process"
 
