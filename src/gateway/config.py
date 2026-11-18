@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     provider_b_url: str
     provider_c_url: str
 
+    redis_url: str
+
 
 @lru_cache
 def get_settings() -> Settings:

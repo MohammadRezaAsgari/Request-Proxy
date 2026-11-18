@@ -1,185 +1,141 @@
-import logging
+import asyncio
+import hashlib
+import json
+import uuid
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse
 
-from gateway.routing.selector import selector
-
-logger = logging.getLogger("gateway")
+from gateway.tasks import process_request
 
 router = APIRouter()
 
-# Idempotent by HTTP semantics, so replaying them is always safe.
-REPLAY_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
+IDEMPOTENCY_TTL = 24 * 60 * 60
 
-# Provider rejected the request or declared itself unavailable,
-# so it was not processed: replaying is safe.
-REJECTED_STATUS_CODES = {429, 503}
-
-# Outcome is unknown: the provider may or may not have processed
-# the request. Only replay when the request is idempotent.
-UNKNOWN_OUTCOME_STATUS_CODES = {502, 504}
-
-EXCLUDED_RESPONSE_HEADERS = {
-    "content-length",
-    "content-encoding",
-    "transfer-encoding",
-    "connection",
-}
-
-
-def is_replay_safe(method: str, headers: dict[str, str]) -> bool:
-    if method.upper() in REPLAY_SAFE_METHODS:
-        return True
-
-    return any(
-        key.lower() == "idempotency-key"
-        for key in headers
-    )
-
-
-def proxy_response(upstream_response: httpx.Response) -> Response:
-    return Response(
-        content=upstream_response.content,
-        status_code=upstream_response.status_code,
-        headers={
-            key: value
-            for key, value in upstream_response.headers.items()
-            if key.lower() not in EXCLUDED_RESPONSE_HEADERS
-        },
-    )
+DELETE_IF_OWNER = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 
 
 @router.post("/process")
 async def process(request: Request):
-    request_id = request.state.request_id
+    idempotency_key = request.headers.get("Idempotency-Key")
 
-    body = await request.body()
-
-    excluded_request_headers = {
-        "host",
-        "content-length",
-        "connection",
-    }
-
-    headers = {
-        key: value
-        for key, value in request.headers.items()
-        if key.lower() not in excluded_request_headers
-    }
-
-    replay_safe = is_replay_safe(request.method, headers)
-
-    providers = selector.providers
-    start_provider = selector.select()
-    start_index = providers.index(start_provider)
-
-    client: httpx.AsyncClient = request.app.state.http_client
-
-    for attempt in range(len(providers)):
-        provider = providers[
-            (start_index + attempt) % len(providers)
-        ]
-
-        logger.info(
-            "request_id=%s selected_provider=%s attempt=%s",
-            request_id,
-            provider.name,
-            attempt + 1,
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key header is required",
         )
 
-        url = f"{provider.base_url}/v1/process"
+    redis = request.app.state.redis
 
-        if request.url.query:
-            url += f"?{request.url.query}"
+    body = await request.body()
+    query_string = request.url.query
 
-        try:
-            upstream_response = await client.request(
-                method=request.method,
-                url=url,
-                content=body,
-                headers=headers,
-            )
-        except httpx.ConnectTimeout:
-            logger.warning(
-                "request_id=%s provider=%s connect timed out attempt=%s",
-                request_id,
-                provider.name,
-                attempt + 1,
-            )
-            continue
-        except httpx.ConnectError:
-            logger.warning(
-                "request_id=%s provider=%s connect failed attempt=%s",
-                request_id,
-                provider.name,
-                attempt + 1,
-            )
-            continue
-        except httpx.TimeoutException as exc:
-            logger.warning(
-                "request_id=%s provider=%s timed out attempt=%s replay_safe=%s",
-                request_id,
-                provider.name,
-                attempt + 1,
-                replay_safe,
-            )
+    payload_hash = hashlib.sha256(
+        b"\n".join(
+            [
+                request.method.encode(),
+                request.url.path.encode(),
+                query_string.encode(),
+                body,
+            ]
+        )
+    ).hexdigest()
 
-            if not replay_safe:
-                raise HTTPException(
-                    status_code=504,
-                    detail="Upstream provider timed out",
-                ) from exc
+    idempotency_redis_key = (
+        f"gateway:idempotency:{idempotency_key}"
+    )
 
-            continue
-        except httpx.RequestError as exc:
-            logger.warning(
-                "request_id=%s provider=%s is unavailable attempt=%s replay_safe=%s",
-                request_id,
-                provider.name,
-                attempt + 1,
-                replay_safe,
+    job_id = str(uuid.uuid4())
+
+    reservation = json.dumps(
+        {
+            "job_id": job_id,
+            "payload_hash": payload_hash,
+        }
+    )
+
+    acquired = await redis.set(
+        idempotency_redis_key,
+        reservation,
+        nx=True,
+        ex=IDEMPOTENCY_TTL,
+    )
+
+    if not acquired:
+        existing_raw = await redis.get(idempotency_redis_key)
+
+        if existing_raw is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key conflict, retry the request",
             )
 
-            if not replay_safe:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Upstream provider unavailable",
-                ) from exc
+        existing = json.loads(existing_raw)
 
-            continue
-
-        status_code = upstream_response.status_code
-
-        if status_code in REJECTED_STATUS_CODES:
-            logger.warning(
-                "request_id=%s provider=%s returned status=%s attempt=%s",
-                request_id,
-                provider.name,
-                status_code,
-                attempt + 1,
-            )
-            continue
-
-        if status_code in UNKNOWN_OUTCOME_STATUS_CODES:
-            logger.warning(
-                "request_id=%s provider=%s returned status=%s attempt=%s replay_safe=%s",
-                request_id,
-                provider.name,
-                status_code,
-                attempt + 1,
-                replay_safe,
+        if existing["payload_hash"] != payload_hash:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Idempotency key was already used "
+                    "with a different payload"
+                ),
             )
 
-            if not replay_safe:
-                return proxy_response(upstream_response)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "job_id": existing["job_id"],
+                "status": "accepted",
+                "duplicate": True,
+            },
+        )
 
-            continue
+    job_metadata_key = f"gateway:job:{job_id}"
 
-        return proxy_response(upstream_response)
+    await redis.set(
+        job_metadata_key,
+        json.dumps({"payload_hash": payload_hash}),
+        ex=IDEMPOTENCY_TTL,
+    )
 
-    raise HTTPException(
-        status_code=502,
-        detail="All attempted providers failed",
+    try:
+        await asyncio.to_thread(
+            process_request.apply_async,
+            kwargs={
+                "body": body.decode(),
+                "query_string": query_string,
+                "attempt": 1,
+                "excluded_providers": [],
+            },
+            task_id=job_id,
+            queue="gateway.process",
+        )
+    except Exception:
+        # Delete only our own reservation.
+        await redis.eval(
+            DELETE_IF_OWNER,
+            1,
+            idempotency_redis_key,
+            reservation,
+        )
+        await redis.delete(job_metadata_key)
+
+        raise HTTPException(
+            status_code=503,
+            detail="Could not enqueue job",
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "accepted",
+            "duplicate": False,
+        },
+        headers={"Location": f"/jobs/{job_id}"},
     )

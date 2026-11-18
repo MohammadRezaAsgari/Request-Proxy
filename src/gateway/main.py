@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from gateway.api.routes import health, process
+from gateway.api.routes import health, jobs, process
 from gateway.config import settings
 from gateway.core.lifespan import lifespan
 from gateway.core.logging import configure_logging
@@ -24,6 +24,8 @@ app.include_router(
     process.router,
     prefix="/v1",
 )
+
+app.include_router(jobs.router)
 
 
 @app.get("/")

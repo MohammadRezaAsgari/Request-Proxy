@@ -10,13 +10,22 @@ services:
       PROVIDER_A_URL: http://provider-a:8000
       PROVIDER_B_URL: http://provider-b:8000
       PROVIDER_C_URL: http://provider-c:8000
+      CELERY_BROKER_URL: amqp://gateway:gateway_dev_password@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     ports:
       - "8000:8000"
     restart: unless-stopped
     depends_on:
-      - provider-a
-      - provider-b
-      - provider-c
+      provider-a:
+        condition: service_started
+      provider-b:
+        condition: service_started
+      provider-c:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -66,3 +75,70 @@ services:
       ERROR_RATE: "0.2"
       RATE_LIMIT: "50"
     restart: unless-stopped
+
+  rabbitmq:
+    image: docker.arvancloud.ir/rabbitmq:3-management
+    container_name: gateway-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: gateway
+      RABBITMQ_DEFAULT_PASS: gateway_dev_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: docker.arvancloud.ir/redis:7-alpine
+    container_name: gateway-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: gateway-celery-worker
+    command: >
+      celery -A gateway.celery_app:celery_app worker
+      --loglevel=info
+      --queues=gateway.process
+    env_file:
+      - .env
+    environment:
+      PROVIDER_A_URL: http://provider-a:8000
+      PROVIDER_B_URL: http://provider-b:8000
+      PROVIDER_C_URL: http://provider-c:8000
+      CELERY_BROKER_URL: amqp://gateway:gateway_dev_password@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      provider-a:
+        condition: service_started
+      provider-b:
+        condition: service_started
+      provider-c:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  redis_data:

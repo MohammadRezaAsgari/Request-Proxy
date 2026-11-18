@@ -49,7 +49,7 @@ async def process(request: Request):
             },
         )
 
-    body = (await request.body()).decode(errors="replace")
+    body = await request.json()
 
     return {
         "provider": PROVIDER_NAME,
