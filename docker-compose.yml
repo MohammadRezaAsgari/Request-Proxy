@@ -6,9 +6,17 @@ services:
     container_name: api-gateway
     env_file:
       - .env
+    environment:
+      PROVIDER_A_URL: http://provider-a:8000
+      PROVIDER_B_URL: http://provider-b:8000
+      PROVIDER_C_URL: http://provider-c:8000
     ports:
       - "8000:8000"
     restart: unless-stopped
+    depends_on:
+      - provider-a
+      - provider-b
+      - provider-c
     healthcheck:
       test:
         - CMD
@@ -19,3 +27,42 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  provider-a:
+    build:
+      context: .
+      dockerfile: mock_providers/Dockerfile
+    container_name: provider-a
+    environment:
+      PROVIDER_NAME: provider_a
+      MIN_LATENCY: "0.3"
+      MAX_LATENCY: "1.0"
+      ERROR_RATE: "0"
+      RATE_LIMIT: "5"
+    restart: unless-stopped
+
+  provider-b:
+    build:
+      context: .
+      dockerfile: mock_providers/Dockerfile
+    container_name: provider-b
+    environment:
+      PROVIDER_NAME: provider_b
+      MIN_LATENCY: "1"
+      MAX_LATENCY: "10"
+      ERROR_RATE: "0.2"
+      RATE_LIMIT: "50"
+    restart: unless-stopped
+
+  provider-c:
+    build:
+      context: .
+      dockerfile: mock_providers/Dockerfile
+    container_name: provider-c
+    environment:
+      PROVIDER_NAME: provider_c
+      MIN_LATENCY: "1"
+      MAX_LATENCY: "10"
+      ERROR_RATE: "0.2"
+      RATE_LIMIT: "50"
+    restart: unless-stopped
