@@ -22,7 +22,7 @@ app.include_router(
 
 app.include_router(
     process.router,
-    prefix=settings.api_v1_prefix,
+    prefix="/v1",
 )
 
 

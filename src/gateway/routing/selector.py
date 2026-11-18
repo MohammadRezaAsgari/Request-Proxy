@@ -15,4 +15,10 @@ class RoundRobinSelector:
         return provider
 
 
+    def select_next(self, current: Provider) -> Provider:
+        current_index = self.providers.index(current)
+        next_index = (current_index + 1) % len(self.providers)
+        return self.providers[next_index]
+
+
 selector = RoundRobinSelector(PROVIDERS)
