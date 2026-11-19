@@ -16,7 +16,7 @@ import httpx
 GATEWAY_URL = "http://localhost:8000"
 PROCESS_URL = f"{GATEWAY_URL}/v1/process"
 POLL_INTERVAL = 0.5
-MAX_RATE_LIMIT_RETRIES = 10
+MAX_RATE_LIMIT_RETRIES = 30
 
 # Every run uses fresh idempotency keys so repeated runs measure real work
 # instead of hitting the previous run's 24h idempotency records.

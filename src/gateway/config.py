@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     rate_limit_capacity: int = Field(gt=0)
     rate_limit_refill_per_second: float = Field(gt=0)
 
+    provider_timeout_seconds: float = Field(gt=0)
+    provider_a_concurrency: int = Field(gt=0)
+    provider_b_concurrency: int = Field(gt=0)
+    provider_c_concurrency: int = Field(gt=0)
+    provider_failure_threshold: int = Field(gt=0)
+    provider_cooldown_seconds: float = Field(gt=0)
+
+    max_inflight_jobs: int = Field(gt=0)
+    inflight_job_ttl_seconds: int = Field(gt=0)
+    max_provider_waits: int = Field(gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

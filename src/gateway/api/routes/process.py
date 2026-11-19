@@ -6,6 +6,12 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway.config import settings
+from gateway.core.limits import (
+    ACQUIRE_SLOT_SCRIPT,
+    inflight_key,
+    now,
+)
 from gateway.core.rate_limit import (
     check_rate_limit,
     client_identity,
@@ -124,6 +130,31 @@ async def process(request: Request):
         ex=IDEMPOTENCY_TTL,
     )
 
+    acquired_slot = await redis.eval(
+        ACQUIRE_SLOT_SCRIPT,
+        1,
+        inflight_key(),
+        job_id,
+        settings.max_inflight_jobs,
+        now(),
+        settings.inflight_job_ttl_seconds,
+    )
+
+    if not acquired_slot:
+        await redis.eval(
+            DELETE_IF_OWNER,
+            1,
+            idempotency_redis_key,
+            reservation,
+        )
+        await redis.delete(job_metadata_key)
+
+        raise HTTPException(
+            status_code=429,
+            detail="Gateway at capacity",
+            headers={"Retry-After": "1"},
+        )
+
     try:
         await asyncio.to_thread(
             process_request.apply_async,
@@ -145,6 +176,7 @@ async def process(request: Request):
             reservation,
         )
         await redis.delete(job_metadata_key)
+        await redis.zrem(inflight_key(), job_id)
 
         raise HTTPException(
             status_code=503,

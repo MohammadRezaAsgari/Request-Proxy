@@ -8,6 +8,27 @@ jobs_exchange = Exchange("gateway.jobs", type="direct", durable=True)
 retry_exchange = Exchange("gateway.retry", type="direct", durable=True)
 dead_exchange = Exchange("gateway.dead", type="direct", durable=True)
 
+
+def retry_queue(suffix: str, ttl_ms: int) -> Queue:
+    name = "gateway.process.retry"
+    routing_key = "process.retry"
+
+    if suffix:
+        name += f".{suffix}"
+        routing_key += f".{suffix}"
+
+    return Queue(
+        name,
+        exchange=retry_exchange,
+        routing_key=routing_key,
+        durable=True,
+        queue_arguments={
+            "x-message-ttl": ttl_ms,
+            "x-dead-letter-exchange": "gateway.jobs",
+            "x-dead-letter-routing-key": "process",
+        },
+    )
+
 celery_app = Celery(
     "gateway",
     broker=os.environ["CELERY_BROKER_URL"],
@@ -36,17 +57,9 @@ celery_app.conf.update(
                 "x-dead-letter-routing-key": "process.dead",
             },
         ),
-        Queue(
-            "gateway.process.retry",
-            exchange=retry_exchange,
-            routing_key="process.retry",
-            durable=True,
-            queue_arguments={
-                "x-message-ttl": 5000,
-                "x-dead-letter-exchange": "gateway.jobs",
-                "x-dead-letter-routing-key": "process",
-            },
-        ),
+        retry_queue("", 5000),
+        retry_queue("10s", 10000),
+        retry_queue("20s", 20000),
         Queue(
             "gateway.process.dead",
             exchange=dead_exchange,
