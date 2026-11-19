@@ -29,10 +29,20 @@ def retry_queue(suffix: str, ttl_ms: int) -> Queue:
         },
     )
 
+try:
+    from gateway.config import settings
+
+    BROKER_URL = settings.celery_broker_url
+    RESULT_BACKEND = settings.celery_result_backend
+except Exception:
+    # Fallback for cases where .env is not yet available
+    BROKER_URL = os.environ.get("CELERY_BROKER_URL", "")
+    RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "")
+
 celery_app = Celery(
     "gateway",
-    broker=os.environ["CELERY_BROKER_URL"],
-    backend=os.environ["CELERY_RESULT_BACKEND"],
+    broker=BROKER_URL,
+    backend=RESULT_BACKEND,
     include=["gateway.tasks"],
 )
 

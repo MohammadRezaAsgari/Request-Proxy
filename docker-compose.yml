@@ -6,14 +6,8 @@ services:
     container_name: api-gateway
     env_file:
       - .env
-    environment:
-      PROVIDER_A_URL: http://provider-a:8000
-      PROVIDER_B_URL: http://provider-b:8000
-      PROVIDER_C_URL: http://provider-c:8000
-      CELERY_BROKER_URL: amqp://gateway:gateway_dev_password@rabbitmq:5672//
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "${GATEWAY_PORT}:${GATEWAY_PORT}"
     restart: unless-stopped
     depends_on:
       provider-a:
@@ -33,7 +27,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GATEWAY_PORT}/health')"
       interval: 1h
       timeout: 5s
       retries: 3
@@ -46,10 +40,10 @@ services:
     container_name: provider-a
     environment:
       PROVIDER_NAME: provider_a
-      MIN_LATENCY: "0.3"
-      MAX_LATENCY: "1.0"
-      ERROR_RATE: "0"
-      RATE_LIMIT: "5"
+      MIN_LATENCY: ${PROVIDER_A_MIN_LATENCY}
+      MAX_LATENCY: ${PROVIDER_A_MAX_LATENCY}
+      ERROR_RATE: ${PROVIDER_A_ERROR_RATE}
+      RATE_LIMIT: ${PROVIDER_A_RATE_LIMIT}
     restart: unless-stopped
 
   provider-b:
@@ -59,10 +53,10 @@ services:
     container_name: provider-b
     environment:
       PROVIDER_NAME: provider_b
-      MIN_LATENCY: "1"
-      MAX_LATENCY: "10"
-      ERROR_RATE: "0.2"
-      RATE_LIMIT: "50"
+      MIN_LATENCY: ${PROVIDER_B_MIN_LATENCY}
+      MAX_LATENCY: ${PROVIDER_B_MAX_LATENCY}
+      ERROR_RATE: ${PROVIDER_B_ERROR_RATE}
+      RATE_LIMIT: ${PROVIDER_B_RATE_LIMIT}
     restart: unless-stopped
 
   provider-c:
@@ -72,21 +66,21 @@ services:
     container_name: provider-c
     environment:
       PROVIDER_NAME: provider_c
-      MIN_LATENCY: "1"
-      MAX_LATENCY: "10"
-      ERROR_RATE: "0.2"
-      RATE_LIMIT: "50"
+      MIN_LATENCY: ${PROVIDER_C_MIN_LATENCY}
+      MAX_LATENCY: ${PROVIDER_C_MAX_LATENCY}
+      ERROR_RATE: ${PROVIDER_C_ERROR_RATE}
+      RATE_LIMIT: ${PROVIDER_C_RATE_LIMIT}
     restart: unless-stopped
 
   rabbitmq:
     image: docker.arvancloud.ir/rabbitmq:3-management
     container_name: gateway-rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: gateway
-      RABBITMQ_DEFAULT_PASS: gateway_dev_password
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     restart: unless-stopped
@@ -101,7 +95,7 @@ services:
     container_name: gateway-redis
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -115,7 +109,7 @@ services:
     image: docker.arvancloud.ir/mongo:7
     container_name: gateway-mongodb
     ports:
-      - "27017:27017"
+      - "${MONGODB_PORT}:27017"
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped
@@ -130,10 +124,10 @@ services:
     container_name: gateway-mongo-express
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "${MONGO_EXPRESS_PORT}:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017
-      ME_CONFIG_BASICAUTH: "false"
+      ME_CONFIG_MONGODB_URL: ${MONGODB_URL}
+      ME_CONFIG_BASICAUTH: ${MONGO_EXPRESS_BASICAUTH}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -147,18 +141,12 @@ services:
       celery -A gateway.celery_app:celery_app worker
       --loglevel=info
       --queues=gateway.process
-      --concurrency=${CELERY_CONCURRENCY:-8}
+      --concurrency=${CELERY_CONCURRENCY}
     stop_grace_period: 30s
     deploy:
-      replicas: ${CELERY_WORKERS:-4}
+      replicas: ${CELERY_WORKERS}
     env_file:
       - .env
-    environment:
-      PROVIDER_A_URL: http://provider-a:8000
-      PROVIDER_B_URL: http://provider-b:8000
-      PROVIDER_C_URL: http://provider-c:8000
-      CELERY_BROKER_URL: amqp://gateway:gateway_dev_password@rabbitmq:5672//
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -173,6 +161,7 @@ services:
       provider-c:
         condition: service_started
     restart: unless-stopped
+
 
 volumes:
   rabbitmq_data:

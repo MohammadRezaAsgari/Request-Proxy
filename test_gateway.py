@@ -7,13 +7,14 @@ Usage:
 
 import argparse
 import asyncio
+import os
 import time
 import uuid
 from collections import Counter
 
 import httpx
 
-GATEWAY_URL = "http://localhost:8000"
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 PROCESS_URL = f"{GATEWAY_URL}/v1/process"
 POLL_INTERVAL = 0.5
 MAX_RATE_LIMIT_RETRIES = 30

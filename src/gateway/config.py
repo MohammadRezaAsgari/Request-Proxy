@@ -18,6 +18,9 @@ class Settings(BaseSettings):
 
     api_v1_prefix: str
 
+    gateway_port: int = Field(gt=0)
+    gateway_url: str
+
     upstream_timeout_seconds: float
     upstream_max_connections: int
     upstream_max_keepalive_connections: int
@@ -27,6 +30,8 @@ class Settings(BaseSettings):
     provider_c_url: str
 
     redis_url: str
+    celery_broker_url: str
+    celery_result_backend: str
 
     rate_limit_capacity: int = Field(gt=0)
     rate_limit_refill_per_second: float = Field(gt=0)
