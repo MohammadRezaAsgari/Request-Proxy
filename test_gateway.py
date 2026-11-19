@@ -16,6 +16,7 @@ import httpx
 GATEWAY_URL = "http://localhost:8000"
 PROCESS_URL = f"{GATEWAY_URL}/v1/process"
 POLL_INTERVAL = 0.5
+MAX_RATE_LIMIT_RETRIES = 10
 
 # Every run uses fresh idempotency keys so repeated runs measure real work
 # instead of hitting the previous run's 24h idempotency records.
@@ -30,26 +31,49 @@ def percentile(values: list[float], p: float) -> float:
 async def submit_job(client, semaphore, request_id: int) -> dict:
     async with semaphore:
         start = time.perf_counter()
+        rate_limited = 0
+        response = None
+        error = None
 
-        try:
-            response = await client.post(
-                PROCESS_URL,
-                json={
-                    "request_id": request_id,
-                    "message": "Hello Gateway",
-                },
-                headers={
-                    "Idempotency-Key": f"bench-{RUN_ID}-{request_id}"
-                },
-            )
-        except httpx.RequestError as exc:
+        for _ in range(MAX_RATE_LIMIT_RETRIES + 1):
+            try:
+                response = await client.post(
+                    PROCESS_URL,
+                    json={
+                        "request_id": request_id,
+                        "message": "Hello Gateway",
+                    },
+                    headers={
+                        "Idempotency-Key": (
+                            f"bench-{RUN_ID}-{request_id}"
+                        )
+                    },
+                )
+            except httpx.RequestError as exc:
+                error = str(exc)
+                break
+
+            if response.status_code == 429:
+                rate_limited += 1
+                await asyncio.sleep(
+                    float(response.headers.get("Retry-After", "1"))
+                )
+                continue
+
+            break
+
+        if response is None or response.status_code == 429:
             return {
                 "id": request_id,
-                "status_code": None,
+                "status_code": (
+                    response.status_code if response else None
+                ),
                 "elapsed": time.perf_counter() - start,
                 "submitted_at": time.perf_counter(),
                 "job_id": None,
-                "error": str(exc),
+                "duplicate": None,
+                "rate_limited": rate_limited,
+                "error": error or "rate limit retries exhausted",
             }
 
         body = response.json() if response.status_code < 500 else {}
@@ -61,6 +85,7 @@ async def submit_job(client, semaphore, request_id: int) -> dict:
             "submitted_at": time.perf_counter(),
             "job_id": body.get("job_id"),
             "duplicate": body.get("duplicate"),
+            "rate_limited": rate_limited,
             "error": None,
         }
 
@@ -139,25 +164,27 @@ async def report_progress(
 async def idempotency_check(client) -> None:
     headers = {"Idempotency-Key": f"bench-idempotency-{RUN_ID}"}
 
-    first = await client.post(
-        PROCESS_URL,
-        json={"message": "idempotency"},
-        headers=headers,
-    )
+    async def post(payload):
+        for _ in range(MAX_RATE_LIMIT_RETRIES + 1):
+            response = await client.post(
+                PROCESS_URL,
+                json=payload,
+                headers=headers,
+            )
+            if response.status_code != 429:
+                return response
+            await asyncio.sleep(
+                float(response.headers.get("Retry-After", "1"))
+            )
+        return response
+
+    first = await post({"message": "idempotency"})
     first_body = first.json()
 
-    same = await client.post(
-        PROCESS_URL,
-        json={"message": "idempotency"},
-        headers=headers,
-    )
+    same = await post({"message": "idempotency"})
     same_body = same.json()
 
-    different = await client.post(
-        PROCESS_URL,
-        json={"message": "different"},
-        headers=headers,
-    )
+    different = await post({"message": "different"})
 
     ok = (
         first.status_code == 202
@@ -275,6 +302,8 @@ async def main(
     print(f"Rejected:            {len(rejected)}")
     print(f"Duplicate jobs:      "
           f"{sum(1 for s in accepted if s.get('duplicate'))}")
+    print(f"Rate-limited retries:"
+          f" {sum(s.get('rate_limited', 0) for s in submissions)}")
     print(f"Concurrency:         {concurrency}")
     print(f"Total time:          {total_time:.2f}s")
     print(f"Submit throughput:   "

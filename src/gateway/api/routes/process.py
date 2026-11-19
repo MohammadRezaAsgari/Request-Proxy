@@ -6,6 +6,11 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway.core.rate_limit import (
+    check_rate_limit,
+    client_identity,
+    rate_limit_headers,
+)
 from gateway.tasks import process_request
 
 router = APIRouter()
@@ -31,6 +36,21 @@ async def process(request: Request):
         )
 
     redis = request.app.state.redis
+
+    rate_limit = await check_rate_limit(
+        redis,
+        client_identity(request),
+    )
+
+    if not rate_limit.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={
+                **rate_limit_headers(rate_limit),
+                "Retry-After": str(rate_limit.retry_after),
+            },
+        )
 
     body = await request.body()
     query_string = request.url.query
@@ -93,6 +113,7 @@ async def process(request: Request):
                 "status": "accepted",
                 "duplicate": True,
             },
+            headers=rate_limit_headers(rate_limit),
         )
 
     job_metadata_key = f"gateway:job:{job_id}"
@@ -137,5 +158,8 @@ async def process(request: Request):
             "status": "accepted",
             "duplicate": False,
         },
-        headers={"Location": f"/jobs/{job_id}"},
+        headers={
+            **rate_limit_headers(rate_limit),
+            "Location": f"/jobs/{job_id}",
+        },
     )

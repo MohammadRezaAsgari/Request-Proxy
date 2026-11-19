@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,9 @@ class Settings(BaseSettings):
     provider_c_url: str
 
     redis_url: str
+
+    rate_limit_capacity: int = Field(gt=0)
+    rate_limit_refill_per_second: float = Field(gt=0)
 
 
 @lru_cache
