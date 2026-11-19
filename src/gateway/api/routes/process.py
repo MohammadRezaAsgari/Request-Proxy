@@ -163,6 +163,7 @@ async def process(request: Request):
                 "query_string": query_string,
                 "attempt": 1,
                 "excluded_providers": [],
+                "idempotency_key": idempotency_key,
             },
             task_id=job_id,
             queue="gateway.process",

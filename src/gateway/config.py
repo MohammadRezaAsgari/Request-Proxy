@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     inflight_job_ttl_seconds: int = Field(gt=0)
     max_provider_waits: int = Field(gt=0)
 
+    mongodb_url: str
+    mongodb_db_name: str
+    mongodb_retention_seconds: int = Field(gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -17,6 +17,7 @@ from gateway.core.limits import (
 )
 from gateway.providers.registry import Provider
 from gateway.routing.selector import selector
+from gateway.storage import ensure_indexes, store_result
 
 logger = logging.getLogger("gateway")
 
@@ -152,6 +153,7 @@ def retry_kwargs(
     attempt: int,
     excluded_providers: list[str],
     wait_count: int,
+    idempotency_key: str,
 ) -> dict:
     return {
         "body": body,
@@ -159,7 +161,31 @@ def retry_kwargs(
         "attempt": attempt,
         "excluded_providers": excluded_providers,
         "wait_count": wait_count,
+        "idempotency_key": idempotency_key,
     }
+
+
+def finalize(
+    job_id: str,
+    client,
+    result: dict,
+    *,
+    body: str,
+    query_string: str,
+    attempt: int,
+    idempotency_key: str,
+) -> dict:
+    """Release the inflight slot and persist the terminal result."""
+    release_slot(client, inflight_key(), job_id)
+    store_result(
+        job_id,
+        result,
+        idempotency_key=idempotency_key,
+        request_body=body,
+        query_string=query_string,
+        attempt=attempt,
+    )
+    return result
 
 
 @celery_app.task(bind=True, name="gateway.tasks.process_request")
@@ -170,6 +196,7 @@ def process_request(
     attempt: int = 1,
     excluded_providers: list[str] | None = None,
     wait_count: int = 0,
+    idempotency_key: str = "",
 ):
     job_id = self.request.id
     client = get_redis()
@@ -179,12 +206,19 @@ def process_request(
 
     if provider is None:
         if wait_count >= settings.max_provider_waits:
-            release_slot(client, inflight_key(), job_id)
-            return {
-                "status": "failed",
-                "error": "No providers available",
-                "attempts": attempt,
-            }
+            return finalize(
+                job_id,
+                client,
+                {
+                    "status": "failed",
+                    "error": "No providers available",
+                    "attempts": attempt,
+                },
+                body=body,
+                query_string=query_string,
+                attempt=attempt,
+                idempotency_key=idempotency_key,
+            )
 
         logger.warning(
             "job_id=%s all providers cooling down, waiting",
@@ -192,7 +226,10 @@ def process_request(
         )
         schedule_retry(
             self,
-            retry_kwargs(body, query_string, attempt, [], wait_count + 1),
+            retry_kwargs(
+                body, query_string, attempt, [], wait_count + 1,
+                idempotency_key,
+            ),
             attempt,
         )
         raise Ignore()
@@ -207,12 +244,19 @@ def process_request(
         int(settings.provider_timeout_seconds) + 10,
     ):
         if wait_count >= settings.max_provider_waits:
-            release_slot(client, inflight_key(), job_id)
-            return {
-                "status": "failed",
-                "error": f"{provider.name} is busy",
-                "attempts": attempt,
-            }
+            return finalize(
+                job_id,
+                client,
+                {
+                    "status": "failed",
+                    "error": f"{provider.name} is busy",
+                    "attempts": attempt,
+                },
+                body=body,
+                query_string=query_string,
+                attempt=attempt,
+                idempotency_key=idempotency_key,
+            )
 
         logger.warning(
             "job_id=%s provider=%s at concurrency limit, trying next",
@@ -227,6 +271,7 @@ def process_request(
                 attempt,
                 excluded + [provider.name],
                 wait_count + 1,
+                idempotency_key,
             ),
             attempt,
         )
@@ -295,6 +340,7 @@ def process_request(
                     attempt + 1,
                     excluded + [provider.name],
                     0,
+                    idempotency_key,
                 ),
                 attempt,
             )
@@ -323,6 +369,7 @@ def process_request(
                     attempt + 1,
                     excluded + [provider.name],
                     0,
+                    idempotency_key,
                 ),
                 attempt,
             )
@@ -337,5 +384,12 @@ def process_request(
         release_slot(client, slot_key, job_id)
 
     # Only terminal outcomes reach here; retries raise Ignore above.
-    release_slot(client, inflight_key(), job_id)
-    return result
+    return finalize(
+        job_id,
+        client,
+        result,
+        body=body,
+        query_string=query_string,
+        attempt=attempt,
+        idempotency_key=idempotency_key,
+    )

@@ -91,3 +91,10 @@ def declare_topology(**_kwargs):
 
         for queue in celery_app.amqp.queues.values():
             queue.declare(channel=channel)
+
+
+@worker_ready.connect
+def declare_mongo_indexes(**_kwargs):
+    from gateway.storage import ensure_indexes
+
+    ensure_indexes()
